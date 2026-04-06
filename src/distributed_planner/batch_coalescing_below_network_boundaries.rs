@@ -80,7 +80,7 @@ mod tests {
         "#;
         let explain = sql_to_explain(query).await;
         // No CoalesceBatchExec is placed before sending data over the network.
-        assert_snapshot!(explain, @r"
+        assert_snapshot!(explain, @"
         ┌───── DistributedExec ── Tasks: t0:[p0] 
         │ CoalescePartitionsExec
         │   [Stage 2] => NetworkCoalesceExec: output_partitions=8, input_tasks=2
@@ -91,10 +91,12 @@ mod tests {
           └──────────────────────────────────────────────────
             ┌───── Stage 1 ── Tasks: t0:[p0..p7] t1:[p0..p7] t2:[p0..p7] 
             │ RepartitionExec: partitioning=Hash([RainToday@0, WindGustDir@1], 8), input_partitions=4
-            │   AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
-            │     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            │       PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
-            │         DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday, WindGustDir], file_type=parquet
+            │   AggregateExec: mode=PartialReduce, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
+            │     RepartitionExec: partitioning=Hash([RainToday@0, WindGustDir@1], 4), input_partitions=4
+            │       AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
+            │         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            │           PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
+            │             DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday, WindGustDir], file_type=parquet
             └──────────────────────────────────────────────────
         ");
     }
@@ -108,7 +110,7 @@ mod tests {
         "#;
         let explain = sql_to_explain(query).await;
         // No CoalesceBatchExec is placed before sending data over the network.
-        assert_snapshot!(explain, @r"
+        assert_snapshot!(explain, @"
         ┌───── DistributedExec ── Tasks: t0:[p0] 
         │ CoalescePartitionsExec
         │   [Stage 2] => NetworkCoalesceExec: output_partitions=8, input_tasks=2
@@ -119,10 +121,12 @@ mod tests {
           └──────────────────────────────────────────────────
             ┌───── Stage 1 ── Tasks: t0:[p0..p7] t1:[p0..p7] t2:[p0..p7] 
             │ RepartitionExec: partitioning=Hash([RainToday@0, WindGustDir@1], 8), input_partitions=4
-            │   AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
-            │     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            │       PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
-            │         DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday, WindGustDir], file_type=parquet
+            │   AggregateExec: mode=PartialReduce, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
+            │     RepartitionExec: partitioning=Hash([RainToday@0, WindGustDir@1], 4), input_partitions=4
+            │       AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
+            │         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            │           PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
+            │             DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday, WindGustDir], file_type=parquet
             └──────────────────────────────────────────────────
         ");
     }
@@ -136,7 +140,7 @@ mod tests {
         "#;
         let explain = sql_to_explain(query).await;
         // CoalesceBatchExec is placed before sending data over the network.
-        assert_snapshot!(explain, @r"
+        assert_snapshot!(explain, @"
         ┌───── DistributedExec ── Tasks: t0:[p0] 
         │ CoalescePartitionsExec
         │   [Stage 2] => NetworkCoalesceExec: output_partitions=8, input_tasks=2
@@ -149,10 +153,12 @@ mod tests {
             ┌───── Stage 1 ── Tasks: t0:[p0..p7] t1:[p0..p7] t2:[p0..p7] 
             │ CoalesceBatchesExec: target_batch_size=101
             │   RepartitionExec: partitioning=Hash([RainToday@0, WindGustDir@1], 8), input_partitions=4
-            │     AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
-            │       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            │         PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
-            │           DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday, WindGustDir], file_type=parquet
+            │     AggregateExec: mode=PartialReduce, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
+            │       RepartitionExec: partitioning=Hash([RainToday@0, WindGustDir@1], 4), input_partitions=4
+            │         AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday, WindGustDir@1 as WindGustDir], aggr=[]
+            │           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            │             PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
+            │               DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday, WindGustDir], file_type=parquet
             └──────────────────────────────────────────────────
         ");
     }

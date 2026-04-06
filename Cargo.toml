@@ -78,6 +78,7 @@ tpch = ["integration"]
 tpcds = ["integration"]
 clickbench = ["integration"]
 sysinfo = ["dep:sysinfo"]
+insta = ["dep:insta"]
 
 [dev-dependencies]
 structopt = "0.3"

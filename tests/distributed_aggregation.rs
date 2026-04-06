@@ -48,7 +48,7 @@ mod tests {
         );
 
         assert_snapshot!(physical_distributed_str,
-            @r"
+            @"
         ┌───── DistributedExec ── Tasks: t0:[p0] 
         │ ProjectionExec: expr=[count(*)@0 as count(*), RainToday@1 as RainToday]
         │   SortPreservingMergeExec: [count(Int64(1))@2 ASC NULLS LAST]
@@ -61,10 +61,12 @@ mod tests {
           │       [Stage 1] => NetworkShuffleExec: output_partitions=3, input_tasks=3
           └──────────────────────────────────────────────────
             ┌───── Stage 1 ── Tasks: t0:[p0..p5] t1:[p0..p5] t2:[p0..p5] 
-            │ RepartitionExec: partitioning=Hash([RainToday@0], 6), input_partitions=1
-            │   AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday], aggr=[count(Int64(1))]
-            │     PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
-            │       DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday], file_type=parquet
+            │ RepartitionExec: partitioning=Hash([RainToday@0], 6), input_partitions=3
+            │   AggregateExec: mode=PartialReduce, gby=[RainToday@0 as RainToday], aggr=[count(Int64(1))]
+            │     RepartitionExec: partitioning=Hash([RainToday@0], 3), input_partitions=1
+            │       AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday], aggr=[count(Int64(1))]
+            │         PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
+            │           DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday], file_type=parquet
             └──────────────────────────────────────────────────
         ",
         );
@@ -130,7 +132,7 @@ mod tests {
         );
 
         assert_snapshot!(physical_distributed_str,
-            @r"
+            @"
         ┌───── DistributedExec ── Tasks: t0:[p0] 
         │ CoalescePartitionsExec
         │   [Stage 2] => NetworkCoalesceExec: output_partitions=6, input_tasks=2
@@ -141,10 +143,12 @@ mod tests {
           │     [Stage 1] => NetworkShuffleExec: output_partitions=3, input_tasks=3
           └──────────────────────────────────────────────────
             ┌───── Stage 1 ── Tasks: t0:[p0..p5] t1:[p0..p5] t2:[p0..p5] 
-            │ RepartitionExec: partitioning=Hash([RainToday@0], 6), input_partitions=1
-            │   AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday], aggr=[count(Int64(1))]
-            │     PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
-            │       DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday], file_type=parquet
+            │ RepartitionExec: partitioning=Hash([RainToday@0], 6), input_partitions=3
+            │   AggregateExec: mode=PartialReduce, gby=[RainToday@0 as RainToday], aggr=[count(Int64(1))]
+            │     RepartitionExec: partitioning=Hash([RainToday@0], 3), input_partitions=1
+            │       AggregateExec: mode=Partial, gby=[RainToday@0 as RainToday], aggr=[count(Int64(1))]
+            │         PartitionIsolatorExec: t0:[p0,__,__] t1:[__,p0,__] t2:[__,__,p0]
+            │           DataSourceExec: file_groups={3 groups: [[/testdata/weather/result-000000.parquet], [/testdata/weather/result-000001.parquet], [/testdata/weather/result-000002.parquet]]}, projection=[RainToday], file_type=parquet
             └──────────────────────────────────────────────────
         ",
         );
@@ -238,6 +242,49 @@ mod tests {
         // Compare against result. The regression this is testing for would have NULL values in
         // the second and third column.
         assert_eq!(actual_result.to_string(), expected_result,);
+
+        Ok(())
+    }
+
+    /// Verifies that `AggregateExec(mode=PartialReduce)` is inserted by the
+    /// default optimizer pass and that distributed results match single-node results.
+    #[tokio::test]
+    async fn partial_reduce_correctness() -> Result<(), Box<dyn Error>> {
+        let (ctx, _guard, _) = start_localhost_context(3, DefaultSessionBuilder).await;
+        register_parquet_tables(&ctx).await?;
+
+        // Use ORDER BY to get a deterministic result for comparison.
+        let query = r#"SELECT "RainToday", COUNT(*) as cnt, COUNT("MinTemp") as cnt_min_temp
+                       FROM weather GROUP BY "RainToday" ORDER BY "RainToday""#;
+
+        // --- distributed plan --------------------------------------------------
+        let df = ctx.sql(query).await?;
+        let physical_distributed = df.create_physical_plan().await?;
+        let plan_str = display_plan_ascii(physical_distributed.as_ref(), false);
+
+        // The default strategy is "partial_reduce", so Stage 1 must show PartialReduce.
+        assert!(
+            plan_str.contains("mode=PartialReduce"),
+            "expected AggregateExec: mode=PartialReduce in distributed plan:\n{plan_str}"
+        );
+
+        let batches_distributed = pretty_format_batches(
+            &execute_stream(physical_distributed, ctx.task_ctx())?
+                .try_collect::<Vec<_>>()
+                .await?,
+        )?;
+
+        // --- single-node plan for reference ------------------------------------
+        let ctx_local = SessionContext::default();
+        *ctx_local.state_ref().write().config_mut() = ctx.copied_config();
+        register_parquet_tables(&ctx_local).await?;
+        let batches_local = pretty_format_batches(&ctx_local.sql(query).await?.collect().await?)?;
+
+        assert_eq!(
+            batches_distributed.to_string(),
+            batches_local.to_string(),
+            "distributed result must match single-node result"
+        );
 
         Ok(())
     }
