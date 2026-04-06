@@ -56,3 +56,4 @@ harness = false
 [[bench]]
 name = "shuffle"
 harness = false
+
