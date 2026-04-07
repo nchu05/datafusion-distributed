@@ -18,6 +18,8 @@ pub struct QueryIter {
         deserialize_with = "deserialize_elapsed"
     )]
     pub elapsed: Duration,
+    #[serde(default)]
+    pub bytes_transferred: u64,
     pub error: Option<String>,
 }
 
@@ -141,6 +143,14 @@ impl BenchResult {
             / self.iterations.len() as u128
     }
 
+    pub fn avg_bytes_transferred(&self) -> u64 {
+        let valid: Vec<_> = self.iterations.iter().filter(|v| v.error.is_none()).collect();
+        if valid.is_empty() {
+            return 0;
+        }
+        valid.iter().map(|v| v.bytes_transferred).sum::<u64>() / valid.len() as u64
+    }
+
     pub fn store(&self) -> Result<()> {
         let path = PathBuf::from(DATA_PATH)
             .join(&self.dataset)
@@ -241,8 +251,18 @@ impl BenchResult {
             let f = avg as f64 / avg_prev as f64;
             (f, "slower", if f > 1.2 { "❌" } else { "✖" })
         };
+        let bytes_prev = prev_query.avg_bytes_transferred();
+        let bytes_new = self.avg_bytes_transferred();
+        let bytes_info = if bytes_prev > 0 && bytes_new > 0 {
+            let kb_prev = bytes_prev as f64 / 1024.0;
+            let kb_new = bytes_new as f64 / 1024.0;
+            let ratio = kb_prev / kb_new;
+            format!(", bytes={kb_prev:.0}K→{kb_new:.0}K ({ratio:.2}x)")
+        } else {
+            String::new()
+        };
         println!(
-            "{:>8}: prev={avg_prev:>4} ms, new={avg:>4} ms, diff={f:.2} {tag} {emoji}",
+            "{:>8}: prev={avg_prev:>4} ms, new={avg:>4} ms, diff={f:.2} {tag} {emoji}{bytes_info}",
             self.id
         );
     }
