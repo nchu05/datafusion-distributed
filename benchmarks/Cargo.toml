@@ -27,7 +27,7 @@ url = "2.5.7"
 arrow-flight = "57.1.0"
 tonic = { version = "0.14.1", features = ["transport"] }
 axum = "0.7"
-object_store = { version = "0.12.4", features = ["aws"] }
+object_store = { version = "0.13", features = ["aws"] }
 aws-config = "1"
 aws-sdk-ec2 = "1"
 openssl = { version = "0.10", features = ["vendored"] }
