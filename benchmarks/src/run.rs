@@ -30,8 +30,10 @@ use datafusion::prelude::*;
 use datafusion_distributed::test_utils::benchmarks_common;
 use datafusion_distributed::test_utils::localhost::LocalHostWorkerResolver;
 use datafusion_distributed::test_utils::{clickbench, tpcds, tpch};
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion_distributed::{
-    DistributedExt, DistributedPhysicalOptimizerRule, NetworkBoundaryExt, Worker,
+    DistributedExt, DistributedMetricsFormat, DistributedPhysicalOptimizerRule,
+    NetworkBoundaryExt, Worker, rewrite_distributed_plan_with_metrics,
 };
 use std::error::Error;
 use std::fs;
@@ -249,18 +251,20 @@ impl RunOpt {
                 }
 
                 match self.execute_query(ctx, query).await {
-                    Ok((result, n_tasks)) => {
+                    Ok((result, n_tasks, bytes_transferred)) => {
                         let elapsed = start.elapsed();
                         let ms = elapsed.as_secs_f64() * 1000.0;
                         let row_count = result.iter().map(|b| b.num_rows()).sum();
+                        let kb = bytes_transferred as f64 / 1024.0;
                         println!(
-                            "Query {id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+                            "Query {id} iteration {i} took {ms:.1} ms and returned {row_count} rows ({kb:.0} KB transferred)"
                         );
 
                         bench_query.iterations.push(QueryIter {
                             elapsed,
                             row_count,
                             n_tasks,
+                            bytes_transferred,
                             error: None,
                         });
                     }
@@ -270,6 +274,7 @@ impl RunOpt {
                             elapsed: Duration::from_millis(0),
                             row_count: 0,
                             n_tasks: 0,
+                            bytes_transferred: 0,
                             error: Some(err.to_string()),
                         });
                         continue 'outer;
@@ -286,7 +291,7 @@ impl RunOpt {
         &self,
         ctx: &SessionContext,
         sql: &str,
-    ) -> Result<(Vec<RecordBatch>, usize)> {
+    ) -> Result<(Vec<RecordBatch>, usize, u64)> {
         let plan = ctx.sql(sql).await?;
         let (state, plan) = plan.into_parts();
 
@@ -319,7 +324,31 @@ impl RunOpt {
                 DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent(true)
             );
         }
-        Ok((result, n_tasks))
+
+        // Sum bytes_transferred from all network boundaries using the metrics
+        // rewriter, which aggregates metrics collected from remote worker tasks.
+        let mut bytes_transferred: u64 = 0;
+        if let Ok(plan_with_metrics) = rewrite_distributed_plan_with_metrics(
+            physical_plan,
+            DistributedMetricsFormat::Aggregated,
+        ) {
+            plan_with_metrics.transform_down(|node| {
+                if node.as_network_boundary().is_some() {
+                    if let Some(metrics) = node.metrics() {
+                        for metric in metrics.iter() {
+                            if let MetricValue::Custom { name, value } = metric.value() {
+                                if name.as_ref() == "bytes_transferred" {
+                                    bytes_transferred += value.as_usize() as u64;
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(Transformed::no(node))
+            })?;
+        }
+
+        Ok((result, n_tasks, bytes_transferred))
     }
 
     fn get_path(&self) -> Result<PathBuf> {
